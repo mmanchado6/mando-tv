@@ -1,0 +1,74 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <!-- Android lo exige para abrir cualquier conexión de red, también la local.
+         La app solo se conecta a IPs privadas de tu WiFi (ver net/LanGate.kt). -->
+    <uses-permission android:name="android.permission.INTERNET" />
+    <!-- Android 17: obligatorio para buscar la tele (mDNS) y hablar con ella en tu red local. -->
+    <uses-permission android:name="android.permission.ACCESS_LOCAL_NETWORK" />
+    <!-- Saber si hay WiFi, atar la conexión a ella y reconectar cuando vuelve. -->
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <!-- Vibrar al pulsar los botones (se concede solo; se puede apagar en los Ajustes de la app). -->
+    <uses-permission android:name="android.permission.VIBRATE" />
+
+    <!-- Solo para el ajuste opcional «Iconos de apps del móvil» (desactivado por defecto): permite
+         ver qué apps con icono hay en el móvil para usar su logo en los accesos directos.
+         Android obliga a declararlo aquí; si el ajuste está desactivado, la app nunca lo consulta. -->
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.MAIN" />
+            <category android:name="android.intent.category.LAUNCHER" />
+        </intent>
+    </queries>
+
+    <!-- Permiso interno que añade AndroidX Core; esta app no lo usa. -->
+    <permission
+        android:name="${applicationId}.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION"
+        tools:node="remove" />
+    <uses-permission
+        android:name="${applicationId}.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION"
+        tools:node="remove" />
+
+    <application
+        android:name=".MandoApp"
+        android:allowBackup="false"
+        android:fullBackupContent="false"
+        android:dataExtractionRules="@xml/data_extraction_rules"
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher"
+        android:label="@string/app_name"
+        android:supportsRtl="true"
+        android:usesCleartextTraffic="false"
+        android:theme="@style/Theme.MandoTV"
+        tools:targetApi="37">
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:screenOrientation="portrait"
+            android:windowSoftInputMode="adjustResize"
+            android:theme="@style/Theme.MandoTV">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <!-- Inicializador de perfiles de rendimiento de AndroidX: no lo necesitamos. -->
+        <provider
+            android:name="androidx.startup.InitializationProvider"
+            android:authorities="${applicationId}.androidx-startup"
+            tools:node="merge">
+            <meta-data
+                android:name="androidx.profileinstaller.ProfileInstallerInitializer"
+                tools:node="remove" />
+            <!-- EmojiCompat podría pedir a Google Play Services que descargue una fuente de emojis. -->
+            <meta-data
+                android:name="androidx.emoji2.text.EmojiCompatInitializer"
+                tools:node="remove" />
+        </provider>
+        <receiver
+            android:name="androidx.profileinstaller.ProfileInstallReceiver"
+            tools:node="remove" />
+    </application>
+</manifest>
