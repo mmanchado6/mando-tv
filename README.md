@@ -186,4 +186,19 @@ app/src/main/java/local/mandotv/
   data/       teles, accesos directos y ajustes (solo en el móvil)
   ui/         pantallas Compose
 app/src/test/  72 tests: protocolo, criptografía, red, «tele falsa» por TLS real, interfaz
+
+## Licencia
+
+Copyright (c) 2026 Manuel Manchado Barquero
+
+Este proyecto se distribuye bajo la licencia
+[PolyForm Noncommercial 1.0.0](https://polyformproject.org/licenses/noncommercial/1.0.0).
+
+Puedes usar, copiar, modificar y redistribuir el código para **fines no comerciales**
+(uso personal, estudio, investigación, proyectos de afición, y uso por organizaciones
+educativas, benéficas o públicas). Cualquier copia o derivado debe conservar el aviso
+de copyright y los términos de esta licencia.
+
+**El uso comercial no está permitido.** Si te interesa usarlo comercialmente,
+contáctame: mmanchado135@gmail.com
 ```
