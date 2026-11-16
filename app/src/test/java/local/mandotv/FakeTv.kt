@@ -61,7 +61,11 @@ class FakeTv(
     val paired: MutableSet<String> = Collections.synchronizedSet(mutableSetOf()),
     private val pingIntervalMs: Long = 0,
     private val sendInitialState: Boolean = true,
+    /** Si no es null, la tele abre una sesión de voz con este número al recibir la tecla Buscar (84). */
+    private val voiceSessionId: Int? = null,
 ) : Closeable {
+    /** Lo recibido de la voz, en orden: «begin:7», «audio:8192» (bytes de muestras), «end:7». */
+    val voiceEvents = CopyOnWriteArrayList<String>()
     val shownCodes = LinkedBlockingQueue<String>()
     val receivedKeys = CopyOnWriteArrayList<Int>()
     val receivedRaw = LinkedBlockingQueue<ByteArray>()
@@ -177,7 +181,15 @@ class FakeTv(
             val raw = Framing.read(s.inputStream)
             receivedRaw.add(raw)
             val m = ProtoMessage.parse(raw)
-            m.message(RemoteMessages.F_KEY_INJECT)?.let { receivedKeys += it.int(1) }
+            m.message(RemoteMessages.F_KEY_INJECT)?.let {
+                receivedKeys += it.int(1)
+                if (it.int(1) == 84 && voiceSessionId != null) {
+                    send(ProtoWriter().message(RemoteMessages.F_VOICE_BEGIN) { int(1, voiceSessionId); string(2, "com.google.android.katniss") }.toByteArray())
+                }
+            }
+            m.message(RemoteMessages.F_VOICE_BEGIN)?.let { voiceEvents += "begin:${it.int(1)}" }
+            m.message(RemoteMessages.F_VOICE_PAYLOAD)?.let { voiceEvents += "audio:${it.bytes(2)?.size ?: 0}" }
+            m.message(RemoteMessages.F_VOICE_END)?.let { voiceEvents += "end:${it.int(1)}" }
             m.message(RemoteMessages.F_PING_RESPONSE)?.let { pingReplies.add(it.int(1)) }
         }
     }
@@ -192,6 +204,12 @@ class FakeTv(
         val end = System.currentTimeMillis() + timeoutMs
         while (receivedKeys.size < count && System.currentTimeMillis() < end) Thread.sleep(10)
         return receivedKeys.toList()
+    }
+
+    fun awaitVoice(last: String, timeoutMs: Long = 5000): List<String> {
+        val end = System.currentTimeMillis() + timeoutMs
+        while (voiceEvents.lastOrNull() != last && System.currentTimeMillis() < end) Thread.sleep(10)
+        return voiceEvents.toList()
     }
 
     fun nextCode(): String = shownCodes.poll(10, TimeUnit.SECONDS) ?: error("la tele no mostró código")

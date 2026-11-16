@@ -11,6 +11,12 @@
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <!-- Vibrar al pulsar los botones (se concede solo; se puede apagar en los Ajustes de la app). -->
     <uses-permission android:name="android.permission.VIBRATE" />
+    <!-- Solo para el ajuste opcional «Micrófono» (desactivado por defecto): hablar al asistente de la
+         tele. Android lo pide la primera vez que se pulsa el botón de voz (vale «solo esta vez») y
+         solo se graba mientras se mantiene pulsado. El audio va cifrado a la tele por la WiFi. -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <!-- La app funciona igual en un dispositivo sin micrófono. -->
+    <uses-feature android:name="android.hardware.microphone" android:required="false" />
 
     <!-- Solo para el ajuste opcional «Iconos de apps del móvil» (desactivado por defecto): permite
          ver qué apps con icono hay en el móvil para usar su logo en los accesos directos.

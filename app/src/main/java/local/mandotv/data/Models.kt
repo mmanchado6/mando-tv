@@ -37,6 +37,8 @@ data class Settings(
     val phoneAppIcons: Boolean = false,
     /** Qué hace el botón Intro del teclado (cada tele reacciona distinto). */
     val enterMode: EnterMode = EnterMode.ENTER,
+    /** Botón de micrófono para hablar al asistente de la tele. Desactivado por defecto. */
+    val voice: Boolean = false,
 )
 
 /** Formas de mandar «Intro» desde el teclado. */

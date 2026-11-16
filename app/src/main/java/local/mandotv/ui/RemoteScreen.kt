@@ -103,6 +103,10 @@ class RemoteUi(
     val onShortcut: (Shortcut) -> Unit,
     val onEditShortcuts: () -> Unit,
     val onOpenKeyboard: () -> Unit,
+    /** Estado del botón de voz; null si el micrófono está desactivado en Ajustes (no se muestra). */
+    val voice: VoiceUi? = null,
+    val onVoiceStart: () -> Unit = {},
+    val onVoiceStop: () -> Unit = {},
 )
 
 /**
@@ -133,7 +137,7 @@ fun RemoteScreen(ui: RemoteUi, initialTab: RemoteTab = RemoteTab.MANDO) {
                     ),
             ) {
                 when (tab) {
-                    RemoteTab.MANDO -> MainPad(ui.status)
+                    RemoteTab.MANDO -> MainPad(ui)
                     RemoteTab.MEDIA -> MediaPad(ui.status)
                     RemoteTab.NUMEROS -> NumberPad()
                     RemoteTab.APPS -> AppsPad(ui.shortcuts, ui.iconFor, ui.iconsVersion, ui.onShortcut, ui.onEditShortcuts)
@@ -250,7 +254,8 @@ private fun BottomTabs(current: RemoteTab, onSelect: (RemoteTab) -> Unit) {
 // ---------------------------------------------------------------- Pestaña «Mando»
 
 @Composable
-private fun MainPad(status: TvStatus) {
+private fun MainPad(ui: RemoteUi) {
+    val status = ui.status
     BoxWithConstraints(Modifier.fillMaxSize()) {
         val u = scale(maxWidth, maxHeight, 370f, 560f)
         val key = 58.dp * u
@@ -263,6 +268,7 @@ private fun MainPad(status: TvStatus) {
                 KeyButton(TvKey.POWER, "Encender o apagar", icon = Icons.Filled.PowerSettingsNew, size = key, color = Palette.power, caption = "Encender")
                 // «Fuente»: en tu Sony solo funciona la tecla TV (volver a la tele / antena)
                 KeyButton(TvKey.TV, "TV", icon = Icons.Filled.LiveTv, size = key, caption = "TV")
+                ui.voice?.let { VoiceButton(it, size = key, onStart = ui.onVoiceStart, onStop = ui.onVoiceStop) }
                 KeyButton(
                     TvKey.MUTE, "Silencio", icon = Icons.AutoMirrored.Filled.VolumeOff, size = key,
                     caption = if (status.muted) "En silencio" else "Silencio", active = status.muted,

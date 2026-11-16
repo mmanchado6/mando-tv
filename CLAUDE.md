@@ -12,7 +12,11 @@ Kotlin + Jetpack Compose. Licencia PolyForm Noncommercial 1.0.0. Documentación 
 - **Sin librerías de terceros nuevas** sin justificarlo y consultarlo. En el APK solo hay Kotlin,
   kotlinx-coroutines y AndroidX/Compose (+ material-icons-extended). Robolectric solo en tests.
 - **Permisos mínimos** (actuales: `INTERNET`, `ACCESS_LOCAL_NETWORK`, `ACCESS_NETWORK_STATE`,
-  `VIBRATE`). Un permiso nuevo hay que justificarlo y consultarlo.
+  `VIBRATE`, y `RECORD_AUDIO` solo para la voz opcional). Un permiso nuevo hay que justificarlo y consultarlo.
+- **Voz desactivada por defecto** (Ajustes → Voz). El permiso del micrófono se comprueba en cada
+  pulsación (puede ser «solo esta vez») y nunca se recuerda. Solo se graba mientras se mantiene
+  pulsado el botón, 15 s como máximo, nunca en segundo plano, y el audio no se guarda ni se registra.
+  La tele reenvía el audio a Google: está avisado en el README y en Ajustes; no quitar ese aviso.
 - El registro de diagnóstico nunca guarda texto del usuario (solo números y longitudes).
 - Nunca subir `firma/` (clave de firma) ni `salida/` (ya en `.gitignore`).
 - Código: comentarios y textos de la UI en español; identificadores en inglés.
@@ -33,10 +37,10 @@ Kotlin + Jetpack Compose. Licencia PolyForm Noncommercial 1.0.0. Documentación 
   repetición y pulsación larga).
 - `crypto/` — certificado X.509 autofirmado RSA 2048 escrito en DER a mano; secreto de emparejamiento.
 - `net/` — `LanGate` (puerta única de red) y `Tls.kt` (certificado de la tele fijado tras emparejar).
-- `remote/` — `Pairing.kt`, `RemoteController.kt` (conexión, reconexión con backoff, estado, teclado),
-  `WakeOnLan.kt`.
+- `remote/` — `Pairing.kt`, `RemoteController.kt` (conexión, reconexión con backoff, estado, teclado,
+  voz con `talk()`), `WakeOnLan.kt`.
 - `android/` — `WifiMonitor` (bind a WiFi), `TvDiscovery` (NsdManager `_androidtvremote2._tcp`),
-  `AppIcons` (logos de accesos), `VibratorHaptics`.
+  `AppIcons` (logos de accesos), `VibratorHaptics`, `MicCapture` (micrófono para la voz).
 - `data/` — SharedPreferences (teles, accesos, ajustes) e identidad cifrada con AES-GCM del Keystore.
 - `ui/` — Compose: `RemoteScreen` (pestañas Mando/Multimedia/123/Apps, escala adaptable sin scroll),
   `KeyboardSheet` (teclado letra a letra), `OtherScreens` (teles, emparejar, ajustes, editor de accesos),
@@ -49,6 +53,11 @@ Kotlin + Jetpack Compose. Licencia PolyForm Noncommercial 1.0.0. Documentación 
 - Código de 6 hex: SHA-256(módulo+exponente cliente, módulo+exponente tele, últimos 4 hex); el primer
   byte = 2 primeros caracteres (checksum local). Bytes sin signo y sin ceros a la izquierda.
 - Funciones anunciadas: 639 (PING|KEY|IME|VOICE|16|POWER|VOLUME|APP_LINK), negociado con la tele.
+- Voz: el mando envía la tecla Buscar (84), la tele responde `remote_voice_begin` (30) con un número
+  de sesión y el mando lo repite. Después `remote_voice_payload` (31) con PCM 16 bits/8 kHz/mono y
+  `remote_voice_end` (32). El audio va en trozos de **20 KB** y la sesión **no se cierra al soltar**:
+  se envía silencio hasta que la tele devuelve un mensaje 31 (final de frase detectado) y se cierra
+  ~3 s después. Referencia usada: librería `androidtvremote2` (PR 35 e issue 49).
 - La tele **no hace ping mientras recibe órdenes**: la conexión solo se da por muerta si no hay
   tráfico en ningún sentido durante 16 s.
 - Teclado: el aviso de campo de texto llega como `remote_ime_key_inject` **con** `text_field_status`

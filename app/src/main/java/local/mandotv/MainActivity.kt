@@ -13,6 +13,7 @@ import android.view.KeyEvent
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
@@ -72,7 +73,7 @@ class MainActivity : ComponentActivity() {
                             denied = permissionDenied,
                         )
                     } else {
-                        App(vm, onCopyLog = ::copyLog)
+                        App(vm, onCopyLog = ::copyLog, onOpenAppPermissions = ::openAppSettings)
                     }
                 }
             }
@@ -133,13 +134,16 @@ class MainActivity : ComponentActivity() {
     companion object {
         /** Permiso de red local de Android 17 (Manifest.permission.ACCESS_LOCAL_NETWORK). */
         const val LOCAL_NETWORK = "android.permission.ACCESS_LOCAL_NETWORK"
+
+        /** Permiso del micrófono: solo se pide si se activa la voz en Ajustes y al pulsar el botón. */
+        const val MICROPHONE = android.Manifest.permission.RECORD_AUDIO
     }
 }
 
 private enum class Overlay { NONE, SETTINGS, SHORTCUTS }
 
 @Composable
-private fun App(vm: MandoViewModel, onCopyLog: () -> Unit) {
+private fun App(vm: MandoViewModel, onCopyLog: () -> Unit, onOpenAppPermissions: () -> Unit) {
     val context = androidx.compose.ui.platform.LocalContext.current
     val screen by vm.screen.collectAsStateWithLifecycle()
     val state by vm.controller.state.collectAsStateWithLifecycle()
@@ -155,7 +159,23 @@ private fun App(vm: MandoViewModel, onCopyLog: () -> Unit) {
     val message by vm.message.collectAsStateWithLifecycle()
     val keyboard by vm.keyboard.collectAsStateWithLifecycle()
     val iconsVersion by vm.iconsVersion.collectAsStateWithLifecycle()
+    val voice by vm.voice.collectAsStateWithLifecycle()
     var overlay by remember { mutableStateOf(Overlay.NONE) }
+    val requestMic = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        vm.toast(
+            if (granted) "Micrófono permitido. Mantén pulsado el botón para hablar."
+            else "Sin permiso de micrófono no se puede hablar a la tele. Puedes darlo en Ajustes → Voz.",
+        )
+    }
+    // El permiso se comprueba en CADA pulsación y nunca se recuerda: si se dio «solo esta vez»,
+    // Android lo retira al cabo de un rato y aquí se vuelve a pedir.
+    val onVoiceStart = {
+        if (ContextCompat.checkSelfPermission(context, MainActivity.MICROPHONE) == PackageManager.PERMISSION_GRANTED) {
+            vm.startVoice()
+        } else {
+            requestMic.launch(MainActivity.MICROPHONE)
+        }
+    }
 
     LaunchedEffect(message) {
         message?.let { Toast.makeText(context, it, Toast.LENGTH_SHORT).show(); vm.consumeMessage() }
@@ -174,6 +194,7 @@ private fun App(vm: MandoViewModel, onCopyLog: () -> Unit) {
                 onForget = { overlay = Overlay.NONE; selected?.let { vm.forgetTv(it.id) } },
                 onEditShortcuts = { overlay = Overlay.SHORTCUTS },
                 onCopyLog = onCopyLog,
+                onOpenAppPermissions = onOpenAppPermissions,
             )
             return
         }
@@ -242,6 +263,9 @@ private fun App(vm: MandoViewModel, onCopyLog: () -> Unit) {
                         onShortcut = vm::launch,
                         onEditShortcuts = { overlay = Overlay.SHORTCUTS },
                         onOpenKeyboard = vm::openKeyboard,
+                        voice = if (settings.voice) voice else null,
+                        onVoiceStart = onVoiceStart,
+                        onVoiceStop = vm::stopVoice,
                     ),
                 )
                 keyboard?.let { req ->

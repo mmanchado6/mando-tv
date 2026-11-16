@@ -37,6 +37,8 @@ import local.mandotv.ui.RemoteTab
 import local.mandotv.ui.RemoteUi
 import local.mandotv.ui.SettingsScreen
 import local.mandotv.ui.ShortcutsEditor
+import local.mandotv.ui.VoiceUi
+import androidx.compose.ui.test.assertIsDisplayed
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Rule
@@ -71,9 +73,13 @@ class UiTest {
         state: ConnectionState = ConnectionState.Connected("Salón"),
         status: TvStatus = TvStatus(powerOn = true, volume = 14, volumeMax = 100),
         shortcuts: List<Shortcut> = Shortcuts.defaults,
+        voice: VoiceUi? = null,
+        onVoiceStart: () -> Unit = {},
+        onVoiceStop: () -> Unit = {},
     ) = RemoteUi(
         tvName = "SONY-BRAVIA-49", state = state, status = status, shortcuts = shortcuts, iconFor = { null },
         onRetry = {}, onRepair = {}, onDevices = {}, onSettings = {}, onShortcut = {}, onEditShortcuts = {}, onOpenKeyboard = {},
+        voice = voice, onVoiceStart = onVoiceStart, onVoiceStop = onVoiceStop,
     )
 
     private fun show(content: @Composable () -> Unit) {
@@ -144,6 +150,30 @@ class UiTest {
         rule.onNodeWithText("En silencio").assertExists()
         rule.onNodeWithContentDescription("Tele en silencio").assertExists()
         capture("1b-mando-silencio")
+    }
+
+    @Test fun voiceButtonIsHiddenUnlessEnabledInSettings() {
+        assertEquals("la voz viene desactivada", false, Settings().voice)
+        show { RemoteScreen(ui()) }
+        rule.onNodeWithContentDescription("Hablar a la tele").assertDoesNotExist()
+    }
+
+    @Test fun voiceButtonTalksOnlyWhileHeld() {
+        val events = CopyOnWriteArrayList<String>()
+        var state by mutableStateOf(VoiceUi.IDLE)
+        show { RemoteScreen(ui(voice = state, onVoiceStart = { events += "start" }, onVoiceStop = { events += "stop" })) }
+        rule.onNodeWithText("Voz").assertIsDisplayed()
+        assertFits("Bajar volumen")
+        rule.onNodeWithContentDescription("Hablar a la tele").performTouchInput { down(center) }
+        rule.waitForIdle()
+        assertEquals(listOf("start"), events.toList())
+        state = VoiceUi.LISTENING
+        rule.onNodeWithText("Escuchando").assertIsDisplayed()
+        capture("1c-mando-voz")
+        rule.onNodeWithContentDescription("Hablar a la tele").performTouchInput { up() }
+        rule.waitForIdle()
+        assertEquals(listOf("start", "stop"), events.toList())
+        assertTrue("la voz no envía teclas desde la UI", sent.isEmpty())
     }
 
     @Test fun removedButtonsAreGone() {
@@ -250,6 +280,7 @@ class UiTest {
             )
         }
         rule.onNodeWithText("Iconos de apps del móvil").assertExists()
+        rule.onNodeWithText("Micrófono para hablar a la tele").assertExists()
         capture("10-ajustes")
     }
 

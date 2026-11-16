@@ -314,6 +314,7 @@ fun SettingsScreen(
     onForget: () -> Unit,
     onEditShortcuts: () -> Unit,
     onCopyLog: () -> Unit,
+    onOpenAppPermissions: () -> Unit = {},
 ) {
     var mac by remember(tv?.id) { mutableStateOf(tv?.mac.orEmpty()) }
     var macError by remember { mutableStateOf(false) }
@@ -333,6 +334,24 @@ fun SettingsScreen(
                 "Desactivado: la app nunca consulta esa lista.",
             settings.phoneAppIcons,
         ) { v -> onChange { it.copy(phoneAppIcons = v) } }
+
+        SectionTitle("Voz")
+        SwitchRow(
+            "Micrófono para hablar a la tele",
+            "Añade un botón de micrófono al mando: mantenlo pulsado para hablar al Asistente de Google de " +
+                "la tele (función en pruebas). El móvil solo graba mientras lo pulsas y envía el audio " +
+                "cifrado a la tele por tu WiFi, sin guardarlo. A partir de ahí es la tele quien lo envía a " +
+                "Google para reconocerlo, igual que con el micrófono de su propio mando.",
+            settings.voice,
+        ) { v -> onChange { it.copy(voice = v) } }
+        if (settings.voice) {
+            Text(
+                "Android te pedirá permiso para el micrófono la primera vez que pulses el botón. Puedes darlo " +
+                    "«solo esta vez» (te lo volverá a pedir más adelante) o quitarlo cuando quieras.",
+                color = Palette.keySubtle, fontSize = 12.sp,
+            )
+            OutlinedButton(onClick = onOpenAppPermissions, modifier = Modifier.padding(top = 8.dp)) { Text("Permisos de la app en Android") }
+        }
 
         SectionTitle("Teclado: botón Intro")
         Text(
@@ -391,6 +410,7 @@ fun SettingsScreen(
             "• Solo se conecta a IPs privadas de tu red local, por los puertos 6466/6467 (y el 9 para Wake-on-LAN), " +
                 "y siempre a través de la WiFi.\n" +
                 "• Sin anuncios, analíticas ni informes de errores.\n" +
+                "• El micrófono está desactivado salvo que lo actives arriba; el audio solo va a tu tele.\n" +
                 "• Las teles emparejadas y la clave del móvil se guardan solo aquí, cifradas con el Android Keystore. " +
                 "Las copias de seguridad están desactivadas.",
             color = Palette.keySubtle, fontSize = 13.sp,

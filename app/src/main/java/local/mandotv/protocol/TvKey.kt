@@ -42,6 +42,8 @@ enum class TvKey(
     GUIDE(172),
     INFO(165),
     CAPTIONS(175),
+    /** Buscar: con la voz activada, la tele responde abriendo una sesión de voz. */
+    SEARCH(84),
     DEL(67),
     ENTER(66),
     NUMPAD_ENTER(160);

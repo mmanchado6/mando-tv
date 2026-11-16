@@ -3,8 +3,10 @@ package local.mandotv.ui
 import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -16,6 +18,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import local.mandotv.BuildConfig
 import local.mandotv.android.AppIcons
+import local.mandotv.android.MicCapture
 import local.mandotv.android.PhoneApp
 import local.mandotv.android.TvDiscovery
 import local.mandotv.android.VibratorHaptics
@@ -39,6 +42,8 @@ import local.mandotv.remote.PairingClient
 import local.mandotv.remote.PairingSession
 import local.mandotv.remote.RemoteController
 import local.mandotv.remote.TvTarget
+import local.mandotv.remote.VoicePhase
+import local.mandotv.remote.VoiceResult
 import local.mandotv.remote.WakeOnLan
 import java.util.UUID
 
@@ -54,6 +59,15 @@ sealed interface PairingUi {
     data object WaitingCode : PairingUi
     data object Checking : PairingUi
     data class Error(val message: String, val canRetryCode: Boolean) : PairingUi
+}
+
+/** Estado del botón de voz. */
+enum class VoiceUi {
+    IDLE,
+    /** Tecla Buscar enviada: esperando a que la tele abra la sesión de voz. */
+    STARTING,
+    /** El micrófono está grabando y el audio va hacia la tele. */
+    LISTENING,
 }
 
 class MandoViewModel(app: Application) : AndroidViewModel(app) {
@@ -88,6 +102,11 @@ class MandoViewModel(app: Application) : AndroidViewModel(app) {
     private val _iconsVersion = MutableStateFlow(0)
     /** Cambia cuando hay que redibujar los logos (ajuste activado/desactivado, accesos editados). */
     val iconsVersion: StateFlow<Int> = _iconsVersion.asStateFlow()
+    private val _voice = MutableStateFlow(VoiceUi.IDLE)
+    val voice: StateFlow<VoiceUi> = _voice.asStateFlow()
+    private val mic = MicCapture()
+    private var voiceJob: Job? = null
+    private var voiceRelease: CompletableDeferred<Unit>? = null
     private val _identityReady = MutableStateFlow(false)
     val identityReady: StateFlow<Boolean> = _identityReady.asStateFlow()
 
@@ -158,6 +177,7 @@ class MandoViewModel(app: Application) : AndroidViewModel(app) {
 
     /** La app pasa a segundo plano: tras 1 minuto se desconecta para ahorrar batería. */
     fun onBackground() {
+        cancelVoice() // el micrófono nunca sigue abierto con la app fuera de la pantalla
         discovery.stop()
         backgroundJob?.cancel()
         backgroundJob = viewModelScope.launch {
@@ -335,6 +355,63 @@ class MandoViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    // ---------- Voz ----------
+
+    /**
+     * Se empieza a pulsar el botón de voz (con el ajuste activado y el permiso de micrófono ya
+     * comprobado por la pantalla): tecla Buscar y, si la tele abre sesión de voz, audio del micrófono
+     * hasta [stopVoice], que la tele detecte el final de la frase o el tiempo máximo.
+     */
+    fun startVoice() {
+        if (!store.settings.value.voice) return
+        val release = CompletableDeferred<Unit>()
+        voiceRelease = release
+        // Si la sesión anterior aún está terminando (sin micrófono, esperando a la tele), se corta
+        // y se empieza una nueva.
+        val previous = voiceJob
+        voiceJob = viewModelScope.launch {
+            previous?.cancelAndJoin()
+            if (release.isCompleted) return@launch
+            _voice.value = VoiceUi.STARTING
+            try {
+                val result = controller.talk(mic, release) { phase ->
+                    when (phase) {
+                        VoicePhase.LISTENING -> if (!release.isCompleted) { _voice.value = VoiceUi.LISTENING; haptics.long() }
+                        // Micrófono cerrado: lo que queda (esperar a la tele) no se enseña.
+                        VoicePhase.FINISHING -> _voice.value = VoiceUi.IDLE
+                    }
+                }
+                when (result) {
+                    VoiceResult.NO_CONNECTION -> {
+                        _message.value = "Sin conexión con la tele"
+                        controller.retryNow()
+                    }
+                    VoiceResult.NOT_OFFERED -> _message.value = "La tele no ha abierto el micrófono en esta pantalla"
+                    VoiceResult.DONE, VoiceResult.BUSY -> Unit
+                }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                log.add("Voz: ${e.javaClass.simpleName}: ${e.message}")
+                _message.value = "No se pudo usar el micrófono del móvil"
+            } finally {
+                if (voiceRelease === release) _voice.value = VoiceUi.IDLE
+            }
+        }
+    }
+
+    /**
+     * Se suelta el botón de voz: el micrófono se cierra y la sesión sigue unos segundos (sin audio)
+     * para que la tele termine de reconocer la frase.
+     */
+    fun stopVoice() {
+        voiceRelease?.complete(Unit)
+        _voice.value = VoiceUi.IDLE // el botón cambia en el acto, sin esperar a que el micrófono termine de cerrarse
+    }
+
+    /** Corta la voz en el acto (la app deja de estar en pantalla). */
+    private fun cancelVoice() { voiceJob?.cancel() }
+
     fun openKeyboard() { _keyboard.value = KeyboardRequest(++keyboardIds, "", "") }
     fun closeKeyboard() { _keyboard.value = null }
 
@@ -404,6 +481,7 @@ class MandoViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     override fun onCleared() {
+        cancelVoice()
         cancelPairing()
         discovery.stop()
     }
