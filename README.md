@@ -8,6 +8,12 @@ necesita ADB ni activar las opciones de desarrollador en la tele.
 - Solo habla con tu red local: sin Internet, sin anuncios, sin analíticas y sin cuentas.
 - Se compila con un solo comando dentro de Docker; no hace falta Android Studio.
 
+> **Versión en pruebas.** Esto es la versión en desarrollo, no la estable: incluye funciones nuevas
+> que todavía se están probando (ahora mismo, la **voz**) y que pueden fallar o cambiar. La versión
+> estable es la de la rama [`main`](https://github.com/mmanchado6/mando-tv/tree/main) y la que se
+> descarga en [Releases](https://github.com/mmanchado6/mando-tv/releases/latest), que no trae estas
+> funciones.
+
 ---
 
 ## Por qué existe este proyecto
@@ -53,6 +59,10 @@ terceros. Para mandar «volumen +» a una tele que está en la misma habitación
 - **Vibración** al pulsar, desactivable.
 - **Opcionales** (en Ajustes): botones de volumen del móvil para la tele, Wake-on-LAN para encender
   la tele desde apagada, e iconos de apps del móvil en los accesos directos.
+- **Voz** (**en pruebas**; opcional y **desactivada por defecto**): un botón de micrófono para hablar
+  al Asistente de Google de la tele, manteniéndolo pulsado. No sirve para la búsqueda por voz propia
+  de las apps (por ejemplo, la de YouTube). Lee antes
+  [qué pasa con tu voz](#voz-qué-pasa-con-el-audio).
 - **Diseño**: tema oscuro, vertical, botones grandes; se adapta a la altura del móvil sin scroll.
 
 > **Compatibilidad**: el protocolo es estándar, pero cada fabricante decide qué teclas acepta, así
@@ -195,8 +205,8 @@ Para actualizar, instala el APK nuevo encima: se conservan las teles emparejadas
 | `protocol/` | Protobuf mínimo hecho a mano, mensajes de emparejamiento y de mando, códigos de tecla |
 | `crypto/` | Certificado X.509 autofirmado (DER escrito a mano) y secreto de emparejamiento |
 | `net/` | `LanGate`, la puerta única de red, y TLS con el certificado de la tele fijado |
-| `remote/` | Emparejamiento, conexión con reconexión automática, teclado y Wake-on-LAN |
-| `android/` | WiFi (atar sockets), búsqueda mDNS, iconos de apps y vibración |
+| `remote/` | Emparejamiento, conexión con reconexión automática, teclado, voz y Wake-on-LAN |
+| `android/` | WiFi (atar sockets), búsqueda mDNS, iconos de apps, vibración y micrófono |
 | `data/` | Teles, accesos directos y ajustes; identidad cifrada con el Android Keystore |
 | `ui/` | Pantallas Compose y el `ViewModel` que lo coordina todo |
 
@@ -227,10 +237,37 @@ que el mando cabe sin scroll en pantallas pequeñas y grandes.
 | Teles emparejadas (nombre, IP, huella del certificado, MAC opcional) | Almacenamiento privado de la app | No |
 | Accesos directos, logos y ajustes | Almacenamiento privado de la app | No |
 | Texto que escribes para la tele | No se guarda; se envía solo a la tele | Solo a la tele, por TLS |
+| Tu voz (solo si activas el micrófono) | No se guarda; se envía a la tele mientras mantienes pulsado el botón | A la tele, por TLS. **La tele la envía después a Google** (ver abajo) |
 | Registro de diagnóstico | Solo en memoria; se borra al cerrar la app | Solo si tú lo copias |
 
 Las **copias de seguridad están desactivadas** (`allowBackup=false` y reglas que excluyen todo): ni
 Google Drive ni la transferencia a otro móvil se llevan estos datos.
+
+### Voz: qué pasa con el audio
+
+> Función **en pruebas**: de momento solo está comprobada con el Asistente de Google en una Sony
+> BRAVIA. La búsqueda por voz dentro de las apps (por ejemplo, el micrófono de YouTube) **no
+> funciona**.
+
+El micrófono es una función **opcional y desactivada por defecto** (Ajustes → Voz). Si no la activas,
+la app nunca pide el permiso ni toca el micrófono. Si la activas:
+
+- **En el móvil**: solo se graba **mientras mantienes pulsado** el botón de voz, con un máximo de
+  15 segundos, y nunca con la app en segundo plano. Al soltarlo el micrófono se apaga; durante unos
+  segundos la app sigue enviando silencio (ceros, no audio) para que la tele termine de reconocer
+  la frase. El audio no se guarda en ningún sitio: pasa de la
+  memoria a la tele y se descarta. El registro de diagnóstico solo apunta cuántos bytes se enviaron.
+- **Del móvil a la tele**: viaja por tu WiFi, cifrado con la misma conexión TLS que las teclas y por
+  la misma puerta de red (`LanGate`). No va a ningún otro destino.
+- **En la tele** (esto la app **no** lo controla): la tele trata ese audio igual que el del
+  micrófono de su propio mando. Es decir, **el Asistente de Google de la tele lo envía a los
+  servidores de Google** para reconocerlo, con la cuenta y los ajustes de privacidad que tenga la
+  tele. Si no quieres que Google reciba tu voz, deja esta función desactivada.
+- **Si la tele no abre una sesión de voz** (no todas las pantallas ni todas las teles lo hacen), el
+  micrófono del móvil ni siquiera se enciende.
+
+Alternativa sin enviar voz a la tele: el teclado de la app admite el dictado del teclado de tu móvil,
+y a la tele solo le llega el texto.
 
 ### Red: solo la red local
 
@@ -251,8 +288,9 @@ Cualquier otro destino se rechaza sin llegar a crear el socket, y hay tests que 
 | `ACCESS_LOCAL_NETWORK` | Obligatorio en Android 17 para buscar la tele (mDNS) y hablar con ella. Se pide al abrir la app. |
 | `ACCESS_NETWORK_STATE` | Saber si hay WiFi, atar la conexión a ella y reconectar cuando vuelve. |
 | `VIBRATE` | Vibrar al pulsar. Android lo concede solo y se puede desactivar en los ajustes de la app. |
+| `RECORD_AUDIO` | Solo para la función opcional de voz. Android lo pide la primera vez que pulsas el botón de micrófono, nunca antes. Puedes darlo «solo esta vez» (la app lo comprueba en cada pulsación y Android volverá a preguntar) o denegarlo: el resto de la app funciona igual. |
 
-No pide ubicación, contactos, almacenamiento, micrófono ni notificaciones.
+No pide ubicación, contactos, almacenamiento ni notificaciones.
 
 El ajuste opcional **«Iconos de apps del móvil»** (desactivado por defecto) necesita declarar en el
 manifiesto que la app puede ver las apps con icono del móvil (`<queries>`); Android no permite
@@ -290,6 +328,8 @@ esa lista (hay un test que lo comprueba), y aunque se active, la lista no sale d
 - **Datos en el móvil**: un móvil rooteado o con el almacenamiento de apps comprometido podría
   exponer los datos guardados. La clave privada va cifrada con el Keystore, pero el resto de datos
   (teles, ajustes) se guarda sin cifrar en el almacenamiento privado de la app.
+- **Voz**: una vez que el audio llega a la tele, lo procesa Google (ver «Voz: qué pasa con el
+  audio»). La app no puede impedirlo ni comprobar qué hace la tele con él.
 - **Wake-on-LAN** envía un paquete de difusión a toda tu red local (sin salir de ella).
 - La app **no se ha sometido a una auditoría de seguridad externa**.
 
@@ -311,6 +351,8 @@ pestaña **Security → Report a vulnerability** de este repositorio.
 | No aparece la tele | Móvil y tele en la misma WiFi (no en la de invitados) y tele encendida. Prueba a escribir la IP. |
 | «La tele no responde» | Tele en reposo profundo: configura Wake-on-LAN o enciéndela con su mando. |
 | «Hay que emparejar de nuevo» | La tele se reseteó o borró el móvil: pulsa *Emparejar*. |
+| «La tele no ha abierto el micrófono en esta pantalla» | Esa app o esa tele no admite voz por este protocolo. Prueba desde la pantalla de inicio. |
+| El micrófono no busca dentro de YouTube u otra app | Es lo esperado por ahora: la voz solo habla con el Asistente de Google, no con el buscador de cada app. Usa el teclado. |
 | El teclado no se abre solo | Esa app de la tele no avisa de que hay un campo de texto: ábrelo con el icono de teclado. |
 | «Intro» no busca o borra una letra | En Ajustes → «Teclado: botón Intro», prueba otra opción. |
 | Un botón no hace nada | Esa tecla no la acepta tu tele por este protocolo. |

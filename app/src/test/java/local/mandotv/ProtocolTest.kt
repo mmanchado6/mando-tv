@@ -236,4 +236,37 @@ class ProtocolTest {
             repeating,
         )
     }
+
+    @Test fun voiceMessages() {
+        // RemoteMessage{ remote_voice_begin(30){ session_id=7 } } y remote_voice_end(32)
+        assertEquals("f2 01 02 08 07", RemoteMessages.voiceBegin(7).hex())
+        assertEquals("82 02 02 08 07", RemoteMessages.voiceEnd(7).hex())
+        assertEquals(Incoming.VoiceBegin(7), RemoteMessages.parse(RemoteMessages.voiceBegin(7)))
+        assertEquals(Incoming.VoiceEnd(7), RemoteMessages.parse(RemoteMessages.voiceEnd(7)))
+        // La tele añade el paquete del asistente al abrir la sesión; solo interesa el número
+        val fromTv = ProtoWriter().message(30) { int(1, 3); string(2, "com.google.android.katniss") }.toByteArray()
+        assertEquals(Incoming.VoiceBegin(3), RemoteMessages.parse(fromTv))
+        assertEquals(84, TvKey.SEARCH.code)
+    }
+
+    @Test fun voiceAudioAlwaysGoesInFull20KbMessages() {
+        fun samples(pcm: ByteArray) = RemoteMessages.voicePayloads(5, pcm).map {
+            val p = ProtoMessage.parse(it).message(RemoteMessages.F_VOICE_PAYLOAD)!!
+            assertEquals(5, p.int(1))
+            p.bytes(2)!!
+        }
+        val full = 20 * 1024
+        assertTrue(samples(ByteArray(0)).isEmpty())
+        // Un trozo corto se rellena con silencio hasta 20 KB, sin tocar el audio
+        // (con mensajes más pequeños la tele recibe el audio pero no reconoce nada)
+        val short = samples(ByteArray(100) { 1 }).single()
+        assertEquals(full, short.size)
+        assertTrue(short.take(100).all { it == 1.toByte() } && short.drop(100).all { it == 0.toByte() })
+        assertEquals(listOf(full), samples(ByteArray(full)).map { it.size })
+        assertEquals(listOf(full, full, full), samples(ByteArray(41 * 1024)).map { it.size })
+        assertTrue(RemoteMessages.voicePayloads(5, ByteArray(41 * 1024)).all { it.size < Framing.MAX_MESSAGE })
+        assertEquals(1280L, RemoteMessages.VOICE_CHUNK_MS)
+        // La tele avisa del final de la frase devolviendo un mensaje de audio con solo el número de sesión
+        assertEquals(Incoming.VoiceHeard(5), RemoteMessages.parse(ProtoWriter().message(31) { int(1, 5) }.toByteArray()))
+    }
 }

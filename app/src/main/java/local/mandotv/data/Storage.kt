@@ -91,6 +91,7 @@ class AppStore(context: Context) {
             wakeOnLan = prefs.getBoolean(K_WOL, true),
             phoneAppIcons = prefs.getBoolean(K_PHONE_ICONS, false),
             enterMode = EnterMode.entries.firstOrNull { it.name == prefs.getString(K_ENTER, null) } ?: EnterMode.ENTER,
+            voice = prefs.getBoolean(K_VOICE, false),
         ),
     )
     val settings: StateFlow<Settings> = _settings.asStateFlow()
@@ -125,6 +126,7 @@ class AppStore(context: Context) {
             .putBoolean(K_WOL, s.wakeOnLan)
             .putBoolean(K_PHONE_ICONS, s.phoneAppIcons)
             .putString(K_ENTER, s.enterMode.name)
+            .putBoolean(K_VOICE, s.voice)
             .apply()
     }
 
@@ -144,5 +146,6 @@ class AppStore(context: Context) {
         private const val K_WOL = "wake_on_lan"
         private const val K_PHONE_ICONS = "iconos_apps_movil"
         private const val K_ENTER = "modo_intro"
+        private const val K_VOICE = "microfono"
     }
 }

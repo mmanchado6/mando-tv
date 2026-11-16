@@ -72,6 +72,10 @@ object RemoteMessages {
     const val F_IME_SHOW_REQUEST = 22
     /** Sin documentar: la tele lo envía (vacío) justo después de cerrar su teclado en pantalla. */
     const val F_IME_CLOSED = 24
+    // Voz: «empieza» (la tele lo envía tras la tecla Buscar y el mando lo repite), audio y «fin».
+    const val F_VOICE_BEGIN = 30
+    const val F_VOICE_PAYLOAD = 31
+    const val F_VOICE_END = 32
     const val F_START = 40
     const val F_SET_VOLUME_LEVEL = 50
     const val F_APP_LINK = 90
@@ -82,7 +86,8 @@ object RemoteMessages {
     const val SHORT = 3
 
     // Funciones que anunciamos a la tele (bitmask). Como la app oficial y otras implementaciones,
-    // anunciamos también VOICE (no se usa): algunas teles solo informan del teclado a mandos «completos».
+    // anunciamos siempre VOICE (aunque el micrófono esté desactivado en Ajustes, que es lo normal):
+    // algunas teles solo informan del teclado a mandos «completos».
     const val FEATURE_PING = 1
     const val FEATURE_KEY = 2
     const val FEATURE_IME = 4
@@ -147,6 +152,32 @@ object RemoteMessages {
         return TextEdit(old.codePointCount(p, old.length), new.substring(p))
     }
 
+    // ---------- Voz ----------
+    // El audio es PCM de 16 bits, 8 kHz, mono. Cada mensaje lleva exactamente 20 KB de muestras
+    // (1,28 s): con trozos menores la tele recibe el audio pero no reconoce nada. Lo que falte se
+    // rellena con silencio.
+    const val VOICE_SAMPLE_RATE = 8000
+    const val VOICE_CHUNK = 20 * 1024
+    /** Lo que dura el audio de un mensaje. */
+    const val VOICE_CHUNK_MS = VOICE_CHUNK * 1000L / (VOICE_SAMPLE_RATE * 2)
+
+    fun voiceBegin(sessionId: Int): ByteArray = ProtoWriter().message(F_VOICE_BEGIN) { int(1, sessionId) }.toByteArray()
+
+    fun voiceEnd(sessionId: Int): ByteArray = ProtoWriter().message(F_VOICE_END) { int(1, sessionId) }.toByteArray()
+
+    /** Mensajes de audio para [pcm]: en trozos de 20 KB, el último relleno con silencio. */
+    fun voicePayloads(sessionId: Int, pcm: ByteArray): List<ByteArray> {
+        val out = ArrayList<ByteArray>()
+        var pos = 0
+        while (pos < pcm.size) {
+            val end = minOf(pos + VOICE_CHUNK, pcm.size)
+            val samples = pcm.copyOfRange(pos, end).let { if (it.size < VOICE_CHUNK) it.copyOf(VOICE_CHUNK) else it }
+            out += ProtoWriter().message(F_VOICE_PAYLOAD) { int(1, sessionId); bytes(2, samples) }.toByteArray()
+            pos = end
+        }
+        return out
+    }
+
     fun appLink(link: String): ByteArray = ProtoWriter().message(F_APP_LINK) { string(1, link) }.toByteArray()
 
     /** Lo que nos interesa de los mensajes que envía la tele. */
@@ -175,6 +206,12 @@ object RemoteMessages {
         data class ImeBatchEdit(val imeCounter: Int, val fieldCounter: Int) : Incoming
         /** La tele ha cerrado su teclado (mensaje 24, sin documentar). */
         data object ImeClosed : Incoming
+        /** La tele abre una sesión de voz (respuesta a la tecla Buscar) y espera el audio. */
+        data class VoiceBegin(val sessionId: Int) : Incoming
+        /** La tele ha detectado el final de la frase (mensaje de audio vacío de vuelta) y la está reconociendo. */
+        data class VoiceHeard(val sessionId: Int) : Incoming
+        /** La tele da por terminada la sesión de voz. */
+        data class VoiceEnd(val sessionId: Int) : Incoming
         data object Error : Incoming
         data class Other(val structure: String) : Incoming
     }
@@ -207,6 +244,9 @@ object RemoteMessages {
         }
         m.message(F_IME_BATCH_EDIT)?.let { return Incoming.ImeBatchEdit(it.int(1), it.int(2)) }
         if (m.has(F_IME_CLOSED)) return Incoming.ImeClosed
+        m.message(F_VOICE_BEGIN)?.let { return Incoming.VoiceBegin(it.int(1)) }
+        m.message(F_VOICE_PAYLOAD)?.let { return Incoming.VoiceHeard(it.int(1)) }
+        m.message(F_VOICE_END)?.let { return Incoming.VoiceEnd(it.int(1)) }
         if (m.has(F_ERROR)) return Incoming.Error
         return Incoming.Other(describe(m))
     }

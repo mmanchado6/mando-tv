@@ -28,6 +28,7 @@ import androidx.compose.material.icons.automirrored.filled.VolumeOff
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
+import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Remove
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
@@ -238,6 +239,54 @@ fun KeyButton(
             if (text != null) Text(text, color = ink, fontWeight = FontWeight.Bold, fontSize = (size.value * 0.32f).sp)
         }
         Caption(caption)
+    }
+}
+
+/**
+ * Botón de voz: se habla mientras se mantiene pulsado. [onStart] al pulsar y [onStop] al soltar.
+ * Se pone ámbar solo mientras el micrófono está grabando. Con TalkBack, un toque empieza y otro termina.
+ */
+@Composable
+fun VoiceButton(state: VoiceUi, size: Dp, onStart: () -> Unit, onStop: () -> Unit, modifier: Modifier = Modifier) {
+    var pressed by remember { mutableStateOf(false) }
+    val haptics = LocalKeySender.current.haptics
+    val start by rememberUpdatedState(onStart)
+    val stop by rememberUpdatedState(onStop)
+    val current by rememberUpdatedState(state)
+    val listening = state == VoiceUi.LISTENING
+    val face by animateColorAsState(if (listening) Palette.warn else Palette.key, label = "color")
+    val ink by animateColorAsState(if (listening) Color(0xFF2B1A00) else Palette.keyText, label = "tinta")
+    Column(modifier, horizontalAlignment = Alignment.CenterHorizontally) {
+        KeyFace(
+            pressed, size, face, CircleShape,
+            Modifier
+                .semantics {
+                    role = Role.Button
+                    contentDescription = "Hablar a la tele"
+                    if (listening) stateDescription = "Escuchando"
+                    onClick { if (current == VoiceUi.IDLE) start() else stop(); true }
+                }
+                .pointerInput(Unit) {
+                    awaitEachGesture {
+                        awaitFirstDown(requireUnconsumed = false)
+                        pressed = true
+                        haptics.tap()
+                        start()
+                        waitForUpOrCancellation()
+                        stop()
+                        pressed = false
+                    }
+                },
+        ) {
+            Icon(Icons.Filled.Mic, null, tint = ink, modifier = Modifier.size(size * 0.44f))
+        }
+        Caption(
+            when (state) {
+                VoiceUi.IDLE -> "Voz"
+                VoiceUi.STARTING -> "Abriendo…"
+                VoiceUi.LISTENING -> "Escuchando"
+            },
+        )
     }
 }
 

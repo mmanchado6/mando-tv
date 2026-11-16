@@ -21,6 +21,11 @@ import local.mandotv.remote.ImeEvent
 import local.mandotv.remote.PairingClient
 import local.mandotv.remote.RemoteController
 import local.mandotv.remote.TvTarget
+import local.mandotv.remote.VoiceResult
+import local.mandotv.remote.VoiceSource
+import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.CompletableDeferred
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -38,10 +43,13 @@ class ConnectionTest {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val tvs = mutableListOf<FakeTv>()
 
-    private fun tv(n: Int, pingMs: Long = 0, identity: ClientIdentity = TestKeys.tv, pairedWith: ClientIdentity? = TestKeys.phone): FakeTv {
+    private fun tv(
+        n: Int, pingMs: Long = 0, identity: ClientIdentity = TestKeys.tv, pairedWith: ClientIdentity? = TestKeys.phone,
+        voiceSession: Int? = null,
+    ): FakeTv {
         val paired = java.util.Collections.synchronizedSet(mutableSetOf<String>())
         pairedWith?.let { paired += it.certificate.publicKeyFingerprint() }
-        return FakeTv("127.0.0.$n", identity, paired, pingIntervalMs = pingMs).also { tvs += it }
+        return FakeTv("127.0.0.$n", identity, paired, pingIntervalMs = pingMs, voiceSessionId = voiceSession).also { tvs += it }
     }
 
     private fun controller(
@@ -309,5 +317,149 @@ class ConnectionTest {
         val link = generateSequence { fake.receivedRaw.poll(5, TimeUnit.SECONDS) }
             .map { ProtoMessage.parse(it) }.first { it.has(RemoteMessages.F_APP_LINK) }
         assertEquals("https://www.youtube.com", link.message(RemoteMessages.F_APP_LINK)!!.string(1))
+    }
+
+    // ---------- Voz ----------
+
+    /** Micrófono de mentira: entrega [chunks] y sigue «grabando» hasta que se cancela; al soltar entrega [tail]. */
+    private class FakeMic(private val chunks: List<ByteArray>, private val tail: ByteArray? = null) : VoiceSource {
+        val started = CompletableDeferred<Unit>()
+        @Volatile var stopped = false
+        override suspend fun record(onChunk: (ByteArray) -> Unit) {
+            try {
+                chunks.forEach(onChunk)
+                started.complete(Unit)
+                awaitCancellation()
+            } finally {
+                tail?.let(onChunk)
+                stopped = true
+            }
+        }
+    }
+
+    private val full = 20 * 1024
+    private fun heard(session: Int) = ProtoWriter().message(RemoteMessages.F_VOICE_PAYLOAD) { int(1, session) }.toByteArray()
+    private fun connected(fake: FakeTv) = controller().also {
+        it.setTarget(target(fake.host)); it.setActive(true)
+        it.await { s -> s is ConnectionState.Connected }
+    }
+
+    @Test fun voiceGoesToTheTvWhileTheButtonIsHeld() = runBlocking {
+        val fake = tv(31, voiceSession = 7)
+        val c = connected(fake)
+        val mic = FakeMic(listOf(ByteArray(full) { 1 }, ByteArray(full) { 2 }), tail = ByteArray(300) { 3 })
+        val release = CompletableDeferred<Unit>()
+        val phases = java.util.concurrent.CopyOnWriteArrayList<String>()
+        val talking = scope.async { c.talk(mic, release, lingerMs = 100) { phases += it.name } }
+        withTimeout(5000) { mic.started.await() }
+        assertEquals(listOf("LISTENING"), phases.toList())
+        release.complete(Unit) // se suelta el botón: el micrófono se cierra pero la sesión sigue
+        // Eco del «empieza» y el audio, con lo último rellenado a 20 KB
+        while (fake.voiceEvents.size < 4) Thread.sleep(10)
+        assertTrue(mic.stopped)
+        assertEquals(listOf("begin:7", "audio:$full", "audio:$full", "audio:$full"), fake.voiceEvents.toList())
+        assertFalse("la sesión no se cierra hasta que la tele tiene la frase", talking.isCompleted)
+        fake.sendToClient(heard(7))
+        assertEquals(VoiceResult.DONE, withTimeout(5000) { talking.await() })
+        assertEquals("end:7", fake.awaitVoice("end:7").last())
+        assertEquals(listOf("LISTENING", "FINISHING"), phases.toList())
+        assertEquals(listOf(84), fake.receivedKeys.toList())
+        // Después se puede volver a hablar
+        val again = scope.async { c.talk(FakeMic(emptyList()), CompletableDeferred(Unit), tailMaxMs = 100) }
+        assertEquals(VoiceResult.DONE, withTimeout(5000) { again.await() })
+    }
+
+    @Test fun afterReleaseOnlySilenceIsSentUntilTheTvIsDone() = runBlocking {
+        val fake = tv(28, voiceSession = 2)
+        val c = connected(fake)
+        val mic = FakeMic(listOf(ByteArray(full) { 1 }))
+        val release = CompletableDeferred<Unit>()
+        val talking = scope.async { c.talk(mic, release, tailMaxMs = 1700) }
+        withTimeout(5000) { mic.started.await() }
+        while (fake.voiceEvents.size < 2) Thread.sleep(10) // el audio del micrófono ya llegó a la tele
+        fake.receivedRaw.clear()
+        release.complete(Unit)
+        // La tele no avisa: se espera el máximo y se cierra igualmente
+        assertEquals(VoiceResult.DONE, withTimeout(5000) { talking.await() })
+        assertEquals(listOf("begin:2", "audio:$full", "audio:$full", "end:2"), fake.awaitVoice("end:2"))
+        val afterRelease = generateSequence { fake.receivedRaw.poll(1, TimeUnit.SECONDS) }
+            .mapNotNull { ProtoMessage.parse(it).message(RemoteMessages.F_VOICE_PAYLOAD)?.bytes(2) }.toList()
+        assertTrue("tras soltar solo viajan ceros", afterRelease.isNotEmpty() && afterRelease.all { a -> a.all { it == 0.toByte() } })
+    }
+
+    @Test fun quickTapOpensTheAssistantWithoutRecording() = runBlocking {
+        val fake = tv(29, voiceSession = 6)
+        val c = connected(fake)
+        val mic = FakeMic(listOf(ByteArray(full)))
+        assertEquals(VoiceResult.DONE, withTimeout(5000) { c.talk(mic, CompletableDeferred(Unit)) })
+        assertFalse("no se graba nada", mic.started.isCompleted)
+        assertEquals(listOf("begin:6", "end:6"), fake.awaitVoice("end:6"))
+    }
+
+    @Test fun cancellingCutsTheVoiceAtOnce() = runBlocking {
+        val fake = tv(30, voiceSession = 8)
+        val c = connected(fake)
+        val mic = FakeMic(listOf(ByteArray(full)))
+        val talking = scope.async { c.talk(mic, CompletableDeferred()) }
+        withTimeout(5000) { mic.started.await() }
+        talking.cancelAndJoin() // la app sale de la pantalla
+        assertTrue(mic.stopped)
+        assertEquals(listOf("begin:8", "audio:$full", "end:8"), fake.awaitVoice("end:8"))
+    }
+
+    @Test fun voiceStopsByItselfAfterTheMaximumTime() = runBlocking {
+        val fake = tv(32, voiceSession = 1)
+        val c = connected(fake)
+        val mic = FakeMic(listOf(ByteArray(full)))
+        assertEquals(VoiceResult.DONE, withTimeout(5000) { c.talk(mic, CompletableDeferred(), maxMs = 300, tailMaxMs = 100) })
+        assertTrue("el micrófono no se queda abierto", mic.stopped)
+        assertEquals(listOf("begin:1", "audio:$full", "end:1"), fake.awaitVoice("end:1"))
+    }
+
+    @Test fun microphoneClosesAsSoonAsTheTvHasThePhrase() = runBlocking {
+        val fake = tv(33, voiceSession = 9)
+        val c = connected(fake)
+        val mic = FakeMic(listOf(ByteArray(full)))
+        val talking = scope.async { c.talk(mic, CompletableDeferred(), lingerMs = 60_000) }
+        withTimeout(5000) { mic.started.await() }
+        fake.sendToClient(heard(9)) // la tele detecta el final de la frase con el botón aún pulsado
+        withTimeout(5000) { while (!mic.stopped) kotlinx.coroutines.delay(10) }
+        assertFalse(talking.isCompleted)
+        fake.sendToClient(RemoteMessages.voiceEnd(9)) // y luego cierra ella la sesión
+        assertEquals(VoiceResult.DONE, withTimeout(5000) { talking.await() })
+    }
+
+    @Test fun microphoneIsNeverOpenedIfTheTvDoesNotOfferVoice() = runBlocking {
+        val fake = tv(34) // esta tele no responde a la tecla Buscar con una sesión de voz
+        val c = controller()
+        val mic = FakeMic(listOf(ByteArray(full)))
+        assertEquals(VoiceResult.NO_CONNECTION, c.talk(mic, CompletableDeferred()))
+        c.setTarget(target(fake.host)); c.setActive(true)
+        c.await { it is ConnectionState.Connected }
+        assertEquals(VoiceResult.NOT_OFFERED, c.talk(mic, CompletableDeferred(), beginTimeoutMs = 300))
+        assertFalse("no se graba nada", mic.started.isCompleted)
+        assertEquals(listOf(84), fake.awaitKeys(1))
+        assertTrue(fake.voiceEvents.isEmpty())
+    }
+
+    @Test fun voiceStopsRecordingIfTheConnectionDrops() = runBlocking {
+        val fake = tv(35, voiceSession = 4)
+        val c = connected(fake)
+        val mic = FakeMic(listOf(ByteArray(full)))
+        val talking = scope.async { c.talk(mic, CompletableDeferred()) }
+        withTimeout(5000) { mic.started.await() }
+        fake.dropConnection()
+        assertEquals(VoiceResult.DONE, withTimeout(5000) { talking.await() })
+        assertTrue(mic.stopped)
+    }
+
+    @Test fun lateVoiceSessionIsClosedIfNobodyIsWaiting() = runBlocking {
+        val fake = tv(36)
+        val c = controller()
+        c.setTarget(target(fake.host)); c.setActive(true)
+        c.await { it is ConnectionState.Connected }
+        // La tele abre sesión cuando ya se soltó el botón: se le dice que termine
+        fake.sendToClient(RemoteMessages.voiceBegin(12))
+        assertEquals(listOf("end:12"), fake.awaitVoice("end:12"))
     }
 }

@@ -1,12 +1,16 @@
 package local.mandotv.remote
 
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.Deferred
+import kotlinx.coroutines.selects.select
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.coroutineScope
@@ -21,6 +25,7 @@ import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runInterruptible
+import kotlinx.coroutines.withTimeoutOrNull
 import local.mandotv.crypto.ClientIdentity
 import local.mandotv.net.LanGate
 import local.mandotv.net.LanPolicy
@@ -31,6 +36,7 @@ import local.mandotv.protocol.RemoteMessages
 import local.mandotv.protocol.RemoteMessages.Incoming
 import local.mandotv.protocol.TvKey
 import java.io.OutputStream
+import java.util.concurrent.atomic.AtomicLong
 import javax.net.ssl.SSLException
 import javax.net.ssl.SSLSocket
 
@@ -64,6 +70,33 @@ sealed interface ImeEvent {
     data class Show(val text: String, val label: String) : ImeEvent
     /** La tele ya no tiene un campo de texto activo. */
     data object Hide : ImeEvent
+}
+
+/** Cómo acabó un intento de hablar a la tele. */
+enum class VoiceResult {
+    /** Se abrió la sesión y se envió audio. */
+    DONE,
+    NO_CONNECTION,
+    /** La tele no abrió sesión de voz (esa pantalla o esa tele no la admiten). */
+    NOT_OFFERED,
+    /** Ya había otra sesión de voz en marcha. */
+    BUSY,
+}
+
+/** Fases de una sesión de voz ya abierta. */
+enum class VoicePhase {
+    /** El micrófono está grabando. */
+    LISTENING,
+    /** Micrófono cerrado: se espera a que la tele termine de reconocer la frase. */
+    FINISHING,
+}
+
+/**
+ * De dónde sale el audio (el micrófono del móvil; en los tests, uno de mentira). [record] entrega
+ * trozos de PCM de 16 bits, 8 kHz, mono, hasta que se cancela.
+ */
+fun interface VoiceSource {
+    suspend fun record(onChunk: (ByteArray) -> Unit)
 }
 
 /** Esperas entre reintentos: 0,5 s, 1, 2, 4, 8 y luego 15 s como máximo. */
@@ -114,6 +147,16 @@ class RemoteController(
     @Volatile private var features = RemoteMessages.FEATURES
     private var loopJob: Job? = null
 
+    /** Sesión de voz en curso: la tele la abre ([begin], null si se corta) y puede cerrarla ([ended]). */
+    private class Voice {
+        val begin = CompletableDeferred<Int?>()
+        val ended = CompletableDeferred<Unit>()
+        /** La tele ha detectado el final de la frase. */
+        val heard = CompletableDeferred<Unit>()
+        @Volatile var sessionId: Int? = null
+    }
+    @Volatile private var voice: Voice? = null
+
     val isConnected: Boolean get() = _state.value is ConnectionState.Connected
 
     fun start() {
@@ -156,6 +199,89 @@ class RemoteController(
     }
 
     fun launchApp(link: String): Boolean = link.isNotBlank() && enqueue(RemoteMessages.appLink(link.trim()))
+
+    /**
+     * Habla a la tele: envía la tecla Buscar, espera a que la tele abra la sesión de voz y le manda
+     * el audio de [source] hasta que se suelta el botón ([release]), la tele detecta el final de la
+     * frase o pasan [maxMs]. Entonces el micrófono se cierra y solo se envía silencio (ceros) hasta
+     * que la tele avisa de que ya tiene la frase, porque cerrar la sesión antes cancela el
+     * reconocimiento; la sesión se cierra [lingerMs] después. Cancelar la corrutina lo corta todo
+     * en el acto.
+     *
+     * El audio va por la misma conexión cifrada que las teclas y no se guarda en ningún sitio. En el
+     * registro solo quedan el número de sesión y cuántos bytes se enviaron.
+     */
+    suspend fun talk(
+        source: VoiceSource,
+        release: Deferred<Unit>,
+        maxMs: Long = VOICE_MAX_MS,
+        beginTimeoutMs: Long = VOICE_BEGIN_TIMEOUT_MS,
+        tailMaxMs: Long = VOICE_TAIL_MAX_MS,
+        lingerMs: Long = VOICE_LINGER_MS,
+        onPhase: (VoicePhase) -> Unit = {},
+    ): VoiceResult {
+        if (!isConnected) return VoiceResult.NO_CONNECTION
+        if (voice != null) return VoiceResult.BUSY
+        val v = Voice()
+        voice = v
+        try {
+            if (!enqueue(RemoteMessages.key(TvKey.SEARCH.code))) return VoiceResult.NO_CONNECTION
+            log("Voz: tecla Buscar enviada, esperando a la tele")
+            val id = withTimeoutOrNull(beginTimeoutMs) { v.begin.await() }
+            if (id == null) {
+                log("Voz: la tele no abrió sesión de voz")
+                return if (isConnected) VoiceResult.NOT_OFFERED else VoiceResult.NO_CONNECTION
+            }
+            v.sessionId = id
+            enqueue(RemoteMessages.voiceBegin(id)) // el protocolo pide repetir el «empieza»
+            val bytes = AtomicLong()
+            try {
+                if (release.isCompleted) return VoiceResult.DONE // toque corto: no se llega a grabar
+                onPhase(VoicePhase.LISTENING)
+                coroutineScope {
+                    val recording = launch {
+                        source.record { pcm ->
+                            RemoteMessages.voicePayloads(id, pcm).forEach { enqueue(it) }
+                            bytes.addAndGet(pcm.size.toLong())
+                        }
+                    }
+                    withTimeoutOrNull(maxMs) {
+                        select<Unit> { release.onAwait {}; v.heard.onAwait {}; v.ended.onAwait {} }
+                    }
+                    recording.cancelAndJoin()
+                }
+                // Aquí el micrófono ya está cerrado: lo que sigue son ceros.
+                onPhase(VoicePhase.FINISHING)
+                if (!v.ended.isCompleted) coroutineScope {
+                    val silence = launch {
+                        val zeros = ByteArray(RemoteMessages.VOICE_CHUNK)
+                        while (true) {
+                            delay(RemoteMessages.VOICE_CHUNK_MS)
+                            RemoteMessages.voicePayloads(id, zeros).forEach { enqueue(it) }
+                        }
+                    }
+                    val heard = withTimeoutOrNull(tailMaxMs) {
+                        select { v.heard.onAwait { true }; v.ended.onAwait { false } }
+                    }
+                    when (heard) {
+                        true -> {
+                            log("Voz: la tele ya tiene la frase")
+                            withTimeoutOrNull(lingerMs) { v.ended.await() }
+                        }
+                        null -> log("Voz: la tele no avisó del final de la frase")
+                        false -> Unit
+                    }
+                    silence.cancel()
+                }
+                return VoiceResult.DONE
+            } finally {
+                enqueue(RemoteMessages.voiceEnd(id))
+                log("Voz: sesión $id cerrada (${bytes.get()} bytes de audio del micrófono)")
+            }
+        } finally {
+            voice = null
+        }
+    }
 
     private fun enqueue(bytes: ByteArray): Boolean {
         if (!isConnected) return false
@@ -319,6 +445,25 @@ class RemoteController(
                                 _ime.tryEmit(ImeEvent.Hide)
                             }
                         }
+                        is Incoming.VoiceBegin -> {
+                            val v = voice
+                            if (v != null && !v.begin.isCompleted) {
+                                log("Voz: la tele abre la sesión ${msg.sessionId}")
+                                v.begin.complete(msg.sessionId)
+                            } else {
+                                // Nadie la espera ya (se soltó el botón antes): se cierra para que la tele no se quede escuchando.
+                                log("Voz: la tele abre la sesión ${msg.sessionId} sin que se espere; se cierra")
+                                write(out, RemoteMessages.voiceEnd(msg.sessionId))
+                            }
+                        }
+                        is Incoming.VoiceHeard -> {
+                            log("Voz: la tele detecta el final de la frase (sesión ${msg.sessionId})")
+                            voice?.takeIf { it.sessionId == msg.sessionId }?.heard?.complete(Unit)
+                        }
+                        is Incoming.VoiceEnd -> {
+                            log("Voz: la tele cierra la sesión ${msg.sessionId}")
+                            voice?.takeIf { it.sessionId == msg.sessionId }?.ended?.complete(Unit)
+                        }
                         is Incoming.Error -> log("La tele informó de un error")
                         is Incoming.Other -> log("Mensaje nuevo de la tele: ${msg.structure}")
                     }
@@ -326,6 +471,8 @@ class RemoteController(
             }
         } finally {
             outgoing = null
+            // Si había una sesión de voz, termina aquí (deja de grabar).
+            voice?.let { it.begin.complete(null); it.ended.complete(Unit) }
             channel.close()
             writer.cancel()
             closer.cancel()
@@ -347,5 +494,13 @@ class RemoteController(
 
     companion object {
         const val IDLE_TIMEOUT_MS = 16_000
+        /** Lo que se espera a que la tele abra la sesión de voz tras la tecla Buscar. */
+        const val VOICE_BEGIN_TIMEOUT_MS = 2_000L
+        /** Duración máxima de una sesión de voz: el micrófono nunca se queda abierto. */
+        const val VOICE_MAX_MS = 15_000L
+        /** Tras soltar el botón, lo que se espera (enviando silencio) a que la tele dé la frase por terminada. */
+        const val VOICE_TAIL_MAX_MS = 6_000L
+        /** Lo que se mantiene abierta la sesión después, para que la tele termine de reconocer. */
+        const val VOICE_LINGER_MS = 3_000L
     }
 }
