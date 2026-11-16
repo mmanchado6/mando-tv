@@ -21,15 +21,21 @@ import javax.crypto.spec.GCMParameterSpec
  * puede extraer del móvil). Si se pierde o no se puede descifrar, se crea una nueva y habrá que
  * volver a emparejar.
  */
-class IdentityStore(context: Context) {
-    private val file = File(context.noBackupFilesDir, "identidad.bin")
+class IdentityStore internal constructor(
+    private val file: File,
+    /** Clave AES que cifra el archivo. En la app, la del Android Keystore; en los tests, una de prueba. */
+    private val key: () -> SecretKey,
+) {
+    constructor(context: Context) : this(fileIn(context), { keystoreKey() })
+
     @Volatile private var cached: ClientIdentity? = null
 
     @Synchronized
     fun get(): ClientIdentity {
         cached?.let { return it }
-        val loaded = runCatching { if (file.exists()) decrypt(file.readBytes()) else null }.getOrNull()
-        val identity = loaded?.let { ClientIdentity.decode(it) } ?: ClientIdentity.generate("Mando TV").also {
+        // Cualquier fallo al leer (archivo manipulado, cortado, clave perdida...) acaba en identidad nueva.
+        val loaded = runCatching { if (file.exists()) ClientIdentity.decode(decrypt(file.readBytes())) else null }.getOrNull()
+        val identity = loaded ?: ClientIdentity.generate("Mando TV").also {
             file.writeBytes(encrypt(it.encode()))
         }
         cached = identity
@@ -39,33 +45,40 @@ class IdentityStore(context: Context) {
     /** ¿Ya existía una identidad? (Si se regenera, las teles guardadas dejan de valer.) */
     fun exists() = file.exists()
 
-    private fun key(): SecretKey {
-        val ks = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
-        (ks.getKey(ALIAS, null) as? SecretKey)?.let { return it }
-        val gen = KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, "AndroidKeyStore")
-        gen.init(
-            KeyGenParameterSpec.Builder(ALIAS, KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT)
-                .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
-                .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
-                .setKeySize(256)
-                .build(),
-        )
-        return gen.generateKey()
-    }
-
-    private fun encrypt(plain: ByteArray): ByteArray {
+    /** Formato del archivo: IV aleatorio (12 bytes) + contenido cifrado + etiqueta GCM (16 bytes). */
+    internal fun encrypt(plain: ByteArray): ByteArray {
         val c = Cipher.getInstance("AES/GCM/NoPadding").apply { init(Cipher.ENCRYPT_MODE, key()) }
         return c.iv + c.doFinal(plain)
     }
 
-    private fun decrypt(data: ByteArray): ByteArray {
+    internal fun decrypt(data: ByteArray): ByteArray {
         val c = Cipher.getInstance("AES/GCM/NoPadding")
-        c.init(Cipher.DECRYPT_MODE, key(), GCMParameterSpec(128, data, 0, 12))
-        return c.doFinal(data, 12, data.size - 12)
+        c.init(Cipher.DECRYPT_MODE, key(), GCMParameterSpec(TAG_BITS, data, 0, IV_BYTES))
+        return c.doFinal(data, IV_BYTES, data.size - IV_BYTES)
     }
 
     companion object {
         private const val ALIAS = "mandotv_identidad"
+        private const val FILE_NAME = "identidad.bin"
+        internal const val IV_BYTES = 12
+        internal const val TAG_BITS = 128
+
+        /** Carpeta que Android excluye de cualquier copia de seguridad. */
+        internal fun fileIn(context: Context) = File(context.noBackupFilesDir, FILE_NAME)
+
+        private fun keystoreKey(): SecretKey {
+            val ks = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
+            (ks.getKey(ALIAS, null) as? SecretKey)?.let { return it }
+            val gen = KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, "AndroidKeyStore")
+            gen.init(
+                KeyGenParameterSpec.Builder(ALIAS, KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT)
+                    .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
+                    .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
+                    .setKeySize(256)
+                    .build(),
+            )
+            return gen.generateKey()
+        }
     }
 }
 

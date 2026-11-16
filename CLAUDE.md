@@ -51,6 +51,9 @@ Kotlin + Jetpack Compose. Licencia PolyForm Noncommercial 1.0.0. Documentación 
   tráfico en claro, solo `MainActivity` exportada) y que solo `net/LanGate.kt` abra sockets: si un
   cambio legítimo lo rompe, se actualiza el test y este archivo a la vez. `HangingTvTest` cubre
   aparatos que aceptan el TCP y no contestan (el handshake TLS tiene 5 s de límite).
+  `IdentityStoreTest` comprueba que `identidad.bin` queda cifrado, que un archivo manipulado o cortado
+  se rechaza y que vive en la carpeta sin copias (con una clave AES de prueba: el Keystore real solo
+  existe en un móvil).
 
 ## Datos del protocolo (verificados en teles reales)
 - **Emparejamiento puerto 6467, mando puerto 6466** (TLS con certificado de cliente).
