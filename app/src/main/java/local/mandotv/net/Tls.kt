@@ -56,13 +56,30 @@ class IdentityKeyManager(private val identity: ClientIdentity) : X509ExtendedKey
 }
 
 object Tls {
-    /** Envuelve un socket TCP ya conectado (por [LanGate]) en TLS y hace el handshake. */
-    fun wrap(socket: Socket, host: String, identity: ClientIdentity, trust: TvTrustManager): SSLSocket {
+    /** Lo máximo que se espera a que el otro lado conteste durante el handshake. */
+    const val HANDSHAKE_TIMEOUT_MS = 5_000
+
+    /**
+     * Envuelve un socket TCP ya conectado (por [LanGate]) en TLS y hace el handshake.
+     *
+     * El handshake tiene tiempo máximo: sin él, un aparato de la red que aceptase la conexión TCP y
+     * no contestase nunca dejaría la app colgada para siempre. Si vence, lanza SocketTimeoutException.
+     * Al terminar se quita el límite; quien llama pone el suyo para la lectura normal.
+     */
+    fun wrap(
+        socket: Socket,
+        host: String,
+        identity: ClientIdentity,
+        trust: TvTrustManager,
+        handshakeTimeoutMs: Int = HANDSHAKE_TIMEOUT_MS,
+    ): SSLSocket {
         val context = SSLContext.getInstance("TLS")
         context.init(arrayOf(IdentityKeyManager(identity)), arrayOf(trust), null)
         val ssl = context.socketFactory.createSocket(socket, host, socket.port, true) as SSLSocket
         ssl.useClientMode = true
+        ssl.soTimeout = handshakeTimeoutMs
         ssl.startHandshake()
+        ssl.soTimeout = 0
         return ssl
     }
 }

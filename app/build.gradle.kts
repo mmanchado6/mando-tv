@@ -74,6 +74,14 @@ android {
             isReturnDefaultValues = false
             all {
                 it.systemProperty("capturas.dir", rootProject.file("salida/capturas").absolutePath)
+                // ProjectGuardTest: revisa el manifiesto que acaba en el APK de release y el código fuente.
+                it.dependsOn("processReleaseManifest")
+                it.systemProperty(
+                    "manifest.release",
+                    layout.buildDirectory.file("intermediates/merged_manifests/release/processReleaseManifest/AndroidManifest.xml")
+                        .get().asFile.absolutePath,
+                )
+                it.systemProperty("main.sources", file("src/main/java").absolutePath)
                 it.maxHeapSize = "2g"
                 it.dependsOn(copyRobolectricRuntime)
                 it.systemProperty("robolectric.offline", "true")

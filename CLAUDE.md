@@ -47,6 +47,10 @@ Kotlin + Jetpack Compose. Licencia PolyForm Noncommercial 1.0.0. Documentación 
   `MandoViewModel` (coordina todo), `Components` (botones con relieve, cruceta, anillo de volumen).
 - Tests (`app/src/test/`): `FakeTv` = tele falsa con TLS real en 127.0.0.x:6466/6467 (los tests usan
   `LoopbackPolicy`). Cubren protocolo, seguridad, conexión, lógica y UI (Robolectric).
+  `ProjectGuardTest` vigila el manifiesto fusionado de release (permisos exactos, sin backups ni
+  tráfico en claro, solo `MainActivity` exportada) y que solo `net/LanGate.kt` abra sockets: si un
+  cambio legítimo lo rompe, se actualiza el test y este archivo a la vez. `HangingTvTest` cubre
+  aparatos que aceptan el TCP y no contestan (el handshake TLS tiene 5 s de límite).
 
 ## Datos del protocolo (verificados en teles reales)
 - **Emparejamiento puerto 6467, mando puerto 6466** (TLS con certificado de cliente).
