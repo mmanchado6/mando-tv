@@ -345,7 +345,7 @@ class ConnectionTest {
     }
 
     @Test fun voiceGoesToTheTvWhileTheButtonIsHeld() = runBlocking {
-        val fake = tv(22, voiceSession = 7)
+        val fake = tv(31, voiceSession = 7)
         val c = connected(fake)
         val mic = FakeMic(listOf(ByteArray(full) { 1 }, ByteArray(full) { 2 }), tail = ByteArray(300) { 3 })
         val release = CompletableDeferred<Unit>()
@@ -408,7 +408,7 @@ class ConnectionTest {
     }
 
     @Test fun voiceStopsByItselfAfterTheMaximumTime() = runBlocking {
-        val fake = tv(23, voiceSession = 1)
+        val fake = tv(32, voiceSession = 1)
         val c = connected(fake)
         val mic = FakeMic(listOf(ByteArray(full)))
         assertEquals(VoiceResult.DONE, withTimeout(5000) { c.talk(mic, CompletableDeferred(), maxMs = 300, tailMaxMs = 100) })
@@ -417,7 +417,7 @@ class ConnectionTest {
     }
 
     @Test fun microphoneClosesAsSoonAsTheTvHasThePhrase() = runBlocking {
-        val fake = tv(24, voiceSession = 9)
+        val fake = tv(33, voiceSession = 9)
         val c = connected(fake)
         val mic = FakeMic(listOf(ByteArray(full)))
         val talking = scope.async { c.talk(mic, CompletableDeferred(), lingerMs = 60_000) }
@@ -430,7 +430,7 @@ class ConnectionTest {
     }
 
     @Test fun microphoneIsNeverOpenedIfTheTvDoesNotOfferVoice() = runBlocking {
-        val fake = tv(25) // esta tele no responde a la tecla Buscar con una sesión de voz
+        val fake = tv(34) // esta tele no responde a la tecla Buscar con una sesión de voz
         val c = controller()
         val mic = FakeMic(listOf(ByteArray(full)))
         assertEquals(VoiceResult.NO_CONNECTION, c.talk(mic, CompletableDeferred()))
@@ -443,7 +443,7 @@ class ConnectionTest {
     }
 
     @Test fun voiceStopsRecordingIfTheConnectionDrops() = runBlocking {
-        val fake = tv(26, voiceSession = 4)
+        val fake = tv(35, voiceSession = 4)
         val c = connected(fake)
         val mic = FakeMic(listOf(ByteArray(full)))
         val talking = scope.async { c.talk(mic, CompletableDeferred()) }
@@ -454,7 +454,7 @@ class ConnectionTest {
     }
 
     @Test fun lateVoiceSessionIsClosedIfNobodyIsWaiting() = runBlocking {
-        val fake = tv(27)
+        val fake = tv(36)
         val c = controller()
         c.setTarget(target(fake.host)); c.setActive(true)
         c.await { it is ConnectionState.Connected }
